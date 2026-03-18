@@ -372,6 +372,135 @@ multi-agent-dev-pipeline/
 
 ---
 
+## 📄 File Reference
+
+Here's what each file does and what you need to edit before using the pipeline.
+
+---
+
+### `orchestrator.py` — The Pipeline Controller
+**Edit required: Yes — one line**
+
+The Python script that runs the entire automated flow. You invoke it via your shell alias and it handles everything from there.
+
+What it does:
+- Accepts your task as a quoted CLI argument: `myapp "your task"`
+- Runs the **Planner** (Kimi K2.5) and streams its output in real time
+- Detects the route tag the planner embeds — `[ROUTE: coder]`, `[ROUTE: reviewer]`, or `[ROUTE: none]`
+- Pauses at a **human approval gate** before any code is written
+- If approved, routes to the **Coder** (MiniMax M2.5) with the plan
+- Runs the **Reviewer** (GLM-5) in a double pass — bugs/logic, then security/quality
+- If rejected, automatically re-prompts the Coder with the reviewer's issues (up to 3 retries)
+- Notifies you to `git pull` to your VPS on final approval
+
+The only line you need to change:
+```python
+# Line 20
+PROJECT_DIR = "/path/to/your/project"
+```
+
+The retry limit is also configurable if you want more or fewer loops:
+```python
+MAX_RETRY_LOOPS = 3
+```
+
+---
+
+### `planner.md` — The Planner Agent System Prompt
+**Model: `opencode-go/kimi-k2.5`**
+**Edit required: Yes — Project Context section**
+
+This is the system prompt that turns Kimi K2.5 into your planner agent. It handles the first step of every pipeline run.
+
+What it does:
+- Detects intent from your prompt — coding task, review request, general question, or VPS/system check
+- Assigns the correct route tag (`[ROUTE: coder]`, `[ROUTE: reviewer]`, `[ROUTE: monitor]`, `[ROUTE: none]`)
+- For coding tasks: produces a structured plan with files to modify, step-by-step instructions, risks, and definition of done
+- For review tasks: summarises what the reviewer should check
+- For general questions: answers directly without triggering the pipeline
+- Always ends with a human approval gate before handing off
+
+Update the **Project Context** block to match your stack:
+```markdown
+## Project Context
+- **Language:** Python
+- **Framework:** FastAPI/Flask
+- **Database:** PostgreSQL/MySQL
+- **Cache:** Redis
+- **Infrastructure:** Docker
+- **Purpose:** Brief description of what your project does
+```
+
+Without this, the planner produces generic plans that may not match your codebase structure.
+
+---
+
+### `coder.md` — The Coder Agent System Prompt
+**Model: `opencode-go/minimax-m2.5`**
+**Edit required: Yes — Project Context + coding rules**
+
+The system prompt for MiniMax M2.5. It receives the approved plan from the orchestrator and implements it end-to-end.
+
+What it does:
+- Detects intent — refuses planning or review requests and redirects to the correct agent
+- Implements only what the plan specifies — does not touch unrelated code
+- Follows strict coding rules: no hardcoded secrets, always handle exceptions, validate trade inputs, follow existing naming conventions
+- Creates migration files if DB changes are needed (never modifies the DB directly)
+- Commits using conventional commit format (`feat:`, `fix:`, `refactor:`, `test:`, `chore:`) with a detailed message
+- Pushes to the correct branch and reports files changed, commit hash, and branch name
+- Ends every response by directing you to switch to the reviewer agent
+
+Update the **Project Context** block so the coder knows your stack. You can also tighten the coding rules to match your project's standards — for example, adding files it should never touch:
+```markdown
+## Project Context
+- **Language:** Python
+- **Framework:** FastAPI
+- **Database:** PostgreSQL
+- **Infrastructure:** Docker
+- **Purpose:** Brief description of what your project does
+```
+
+---
+
+### `reviewer.md` — The Reviewer Agent System Prompt
+**Model: `opencode-go/glm-5`**
+**Edit required: Yes — Critical Issues section**
+
+The system prompt for GLM-5. Runs after every coder push — or directly if you route a review task.
+
+What it does:
+- Detects intent — refuses to plan or code, only reviews
+- Runs **Pass 1** (bugs, trading logic errors, missing error handling, breaking changes)
+- Runs **Pass 2** (security, hardcoded secrets, code quality, test coverage, Docker/env changes)
+- Both passes must complete before a verdict is issued
+- Outputs `✅ APPROVED` or `❌ CHANGES NEEDED` with specific issues listed per pass
+- If approved, confirms it's safe to pull to VPS
+- If rejected, tells the orchestrator exactly what to fix — the orchestrator feeds this back to the coder automatically
+
+The most important section to customise is **Critical Issues** — the reviewer will hard-block any commit that triggers these:
+```markdown
+### 🔴 Critical (must block merge)
+- Trading logic errors
+- Hardcoded secrets or credentials
+- Missing error handling in trade execution or API calls
+- Breaking changes without backward compatibility
+```
+
+Add your own domain-specific rules here. Everything in this section becomes a mandatory gate on every single commit.
+
+---
+
+### Quick Reference
+
+| File | Model | Edit required | What to change |
+|------|-------|---------------|----------------|
+| `orchestrator.py` | — | Yes, once | `PROJECT_DIR` on line 20 |
+| `planner.md` | Kimi K2.5 | Yes | Project Context block |
+| `coder.md` | MiniMax M2.5 | Yes | Project Context + coding rules |
+| `reviewer.md` | GLM-5 | Yes | Critical Issues block |
+
+---
+
 ## 🔧 Customising for Your Project
 
 Each agent `.md` file has a **Project Context** section — update it for your stack:
