@@ -587,4 +587,4 @@ Built with [OpenCode](https://opencode.ai) and [OpenCode Go](https://opencode.ai
 
 ---
 
-*Built by [PyBankers](https://pybankers.com) — a community for developer-traders.*
+*Built by [PyBankers](https://pybankers.com) — a community for AI developers.*
