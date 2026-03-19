@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Multi-Agent Dev Pipeline — Orchestrator
-========================================
-Planner → [Human Approval] → Smart Route
+auto-agent — Multi-Agent Dev Pipeline Orchestrator
+====================================================
+Planner (Kimi K2.5) → [Human Approval] → Smart Route
     → [ROUTE: none]     → Planner answers directly, no agents needed
-    → [ROUTE: reviewer] → Reviewer (double pass) → Human notified
-    → [ROUTE: coder]    → Coder → Reviewer (double pass)
+    → [ROUTE: reviewer] → Reviewer (GLM-5) + Approver (MiniMax M2.7) → Consensus
+    → [ROUTE: coder]    → Coder (MiniMax M2.5) → Reviewer + Approver → Consensus
 
-Reviewer runs two independent passes internally.
-If APPROVED → notify human to pull to server.
-If CHANGES NEEDED → auto-route to coder, retry up to 3 times.
+Consensus rules:
+    Both APPROVED       → ✅ Deploy
+    Both CHANGES NEEDED → ❌ Auto-route to coder
+    Split verdict       → ⚠️  Ask human to decide
 
 Usage:
     python orchestrator.py "your task here"
@@ -23,7 +24,7 @@ from datetime import datetime
 # CONFIG — update these before first run
 # ─────────────────────────────────────────
 PROJECT_DIR = "/path/to/your/project"   # ← change this to your project path
-MAX_RETRY_LOOPS = 3                     # max times coder retries after reviewer rejects
+MAX_RETRY_LOOPS = 3                     # max times coder retries after rejection
 
 # ─────────────────────────────────────────
 # HELPERS
@@ -96,7 +97,7 @@ def ask_human(question: str) -> bool:
             sys.exit(0)
 
 def is_approved(review_output: str) -> bool:
-    """Check if reviewer approved the commit."""
+    """Check if agent approved the commit."""
     return "APPROVED" in review_output.upper()
 
 def notify(message: str):
@@ -107,17 +108,82 @@ def notify(message: str):
     print("★" * width + "\n")
     sys.stdout.flush()
 
-def run_reviewer(attempt: int = 1) -> str:
-    """Run the double pass reviewer and return full output."""
-    print_banner("reviewer", "GLM-5 (double pass)", f"→ REVIEWER (attempt {attempt})")
+def run_review_and_approval(attempt: int = 1) -> tuple:
+    """
+    Run reviewer (GLM-5) then approver (MiniMax M2.7) independently.
+    Returns (both_approved, both_rejected, is_split, combined, review, approval)
+    """
+    # REVIEWER — GLM-5
+    print_banner("reviewer", "GLM-5", f"→ REVIEWER (attempt {attempt})")
     review = run_agent(
         agent="reviewer",
-        prompt="Review the latest git commit using your double pass process. Pass 1: bugs and logic. Pass 2: security and quality. Output APPROVED or CHANGES NEEDED with full details."
+        prompt="Review the latest git commit independently. Output APPROVED or CHANGES NEEDED with full details."
     )
     if not review:
         print("❌ Reviewer returned no output. Aborting.")
         sys.exit(1)
-    return review
+
+    # APPROVER — MiniMax M2.7
+    print_banner("approver", "MiniMax M2.7", f"→ APPROVER (attempt {attempt})")
+    approval = run_agent(
+        agent="approver",
+        prompt="Review the latest git commit independently for final approval. Output APPROVED or CHANGES NEEDED with full details."
+    )
+    if not approval:
+        print("❌ Approver returned no output. Aborting.")
+        sys.exit(1)
+
+    r_approved = is_approved(review)
+    a_approved = is_approved(approval)
+    both_approved = r_approved and a_approved
+    both_rejected = not r_approved and not a_approved
+    is_split = r_approved != a_approved
+
+    # Print consensus summary
+    print_divider()
+    print(f"  📊 REVIEW & APPROVAL CONSENSUS:")
+    print(f"     Reviewer (GLM-5):        {'✅ APPROVED' if r_approved else '❌ CHANGES NEEDED'}")
+    print(f"     Approver (MiniMax M2.7): {'✅ APPROVED' if a_approved else '❌ CHANGES NEEDED'}")
+
+    if both_approved:
+        print(f"     Result: ✅ CONSENSUS — Both approved")
+    elif both_rejected:
+        print(f"     Result: ❌ CONSENSUS — Both rejected")
+    else:
+        print(f"     Result: ⚠️  SPLIT VERDICT — Human decision required")
+    print_divider()
+
+    combined = f"REVIEWER (GLM-5):\n{review}\n\nAPPROVER (MiniMax M2.7):\n{approval}"
+    return both_approved, both_rejected, is_split, combined, review, approval
+
+def handle_split_verdict(review: str, approval: str, r_approved: bool) -> bool:
+    """
+    Handle split verdict — show flagged issues and ask human to decide.
+    Returns True if human decides to send to coder, False to approve and deploy.
+    """
+    print("\n  ⚠️  SPLIT VERDICT DETECTED")
+    print("  One agent approved, one requested changes.\n")
+
+    if not r_approved:
+        print("  ❌ Reviewer (GLM-5) flagged these issues:")
+        print("  " + "─" * 56)
+        lines = [l for l in review.split('\n') if l.strip()]
+        for line in lines[-10:]:
+            print(f"     {line}")
+    else:
+        print("  ❌ Approver (MiniMax M2.7) flagged these issues:")
+        print("  " + "─" * 56)
+        lines = [l for l in approval.split('\n') if l.strip()]
+        for line in lines[-10:]:
+            print(f"     {line}")
+
+    print_divider()
+    print("  You decide:")
+    print("  → yes/y = Send to coder to fix the flagged issues")
+    print("  → no/n  = Ignore the flag and approve for deploy")
+    print()
+
+    return ask_human("Send to coder to fix?")
 
 def review_and_fix_loop(initial_coder_prompt: str = None) -> bool:
     """
@@ -127,7 +193,7 @@ def review_and_fix_loop(initial_coder_prompt: str = None) -> bool:
     """
     attempt = 0
     code_approved = False
-    review = ""
+    combined = ""
     skip_coder_first = initial_coder_prompt is None
     coder_prompt = initial_coder_prompt
 
@@ -142,18 +208,33 @@ def review_and_fix_loop(initial_coder_prompt: str = None) -> bool:
                 print("❌ Coder returned no output. Aborting.")
                 sys.exit(1)
 
-        # Double pass review
-        review = run_reviewer(attempt)
+        # Reviewer + Approver consensus
+        both_approved, both_rejected, is_split, combined, review, approval = run_review_and_approval(attempt)
+        r_approved = is_approved(review)
 
-        if is_approved(review):
+        if both_approved:
             code_approved = True
-        else:
+
+        elif both_rejected:
             if attempt < MAX_RETRY_LOOPS:
-                print(f"\n  🔄 Reviewer rejected. Routing to coder... (attempt {attempt}/{MAX_RETRY_LOOPS})")
-                coder_prompt = f"The reviewer rejected the commit after double pass review. Fix these issues:\n\n{review}"
+                print(f"\n  🔄 Both rejected. Routing to coder... (attempt {attempt}/{MAX_RETRY_LOOPS})")
+                coder_prompt = f"Both reviewer and approver rejected the commit. Fix these issues:\n\n{combined}"
                 skip_coder_first = False
             else:
                 print(f"\n  ❌ Max retries ({MAX_RETRY_LOOPS}) reached. Manual intervention needed.")
+
+        elif is_split:
+            send_to_coder = handle_split_verdict(review, approval, r_approved)
+            if send_to_coder:
+                if attempt < MAX_RETRY_LOOPS:
+                    flagged = review if not r_approved else approval
+                    coder_prompt = f"One agent flagged these issues. Fix them:\n\n{flagged}"
+                    skip_coder_first = False
+                else:
+                    print(f"\n  ❌ Max retries ({MAX_RETRY_LOOPS}) reached. Manual intervention needed.")
+            else:
+                print("\n  ✅ Human overriding split verdict — approving for deploy.")
+                code_approved = True
 
     return code_approved
 
@@ -168,7 +249,7 @@ def main():
 
     task = " ".join(sys.argv[1:])
 
-    print(f"\n🚀 Multi-Agent Pipeline Starting")
+    print(f"\n🚀 auto-agent Pipeline Starting")
     print(f"   Task: {task}")
     print(f"   Time: {timestamp()}")
     sys.stdout.flush()
@@ -202,7 +283,6 @@ def main():
 
     # ─────────────────────────────────────
     # STEP 3: HUMAN APPROVAL GATE
-    # (only for coder and reviewer routes)
     # ─────────────────────────────────────
     print_divider()
     print("  ⚠️  HUMAN APPROVAL REQUIRED")
@@ -220,13 +300,13 @@ def main():
     sys.stdout.flush()
 
     # ─────────────────────────────────────
-    # ROUTE: REVIEWER ONLY
+    # ROUTE: REVIEWER + APPROVER ONLY
     # ─────────────────────────────────────
     if route == "reviewer":
         final_approved = review_and_fix_loop(initial_coder_prompt=None)
 
     # ─────────────────────────────────────
-    # ROUTE: CODER → REVIEWER
+    # ROUTE: CODER → REVIEWER + APPROVER
     # ─────────────────────────────────────
     else:
         final_approved = review_and_fix_loop(
@@ -237,7 +317,7 @@ def main():
     # FINAL OUTCOME
     # ─────────────────────────────────────
     if final_approved:
-        notify("✅ REVIEWER APPROVED (double pass) — Pull to your server when ready:\n   git pull origin main")
+        notify("✅ REVIEWER & APPROVER CONSENSUS — Pull to your server when ready:\n   git pull origin main")
     else:
         notify("❌ CHANGES NEEDED — Review the issues above and re-run.")
         sys.exit(1)
