@@ -148,10 +148,12 @@ There are two distinct modes — pick the right one for the job.
 
 ---
 
-### Mode 1 — Automated Pipeline (CLI alias)
+### Mode 1 — Automated Pipeline (CLI function)
 
 ```bash
-myapp "your task in quotes"
+myapp add a user authentication feature
+# or with quotes — both work
+myapp "add a user authentication feature"
 ```
 
 Best for **autonomous software engineering**. You fire off a task, the agents handle planning, coding, and reviewing end-to-end with auto-routing — minimal interaction needed.
@@ -188,7 +190,7 @@ This gives you a **full chatbot experience** — you can talk to each agent conv
 
 ---
 
-> **Rule of thumb:** Know exactly what you want built or fixed? → Use the CLI alias. Want to think it through with an agent first? → Use the TUI.
+> **Rule of thumb:** Know exactly what you want built or fixed? → Use the CLI function. Want to think it through with an agent first? → Use the TUI.
 
 ---
 
@@ -227,23 +229,35 @@ cp opencode/orchestrator.py your-project/.opencode/
 PROJECT_DIR = "/path/to/your/project"
 ```
 
-**5. Add a shell alias**
+**5. Add a shell function**
+
+Open `~/.zshrc` (or `~/.bashrc` if you use bash) and add this function — replace `myapp` with your project name and update the path:
+
 ```bash
 # Add to ~/.zshrc or ~/.bashrc
-# Replace "myapp" with whatever name makes sense for your project
-alias myapp="python /path/to/your-project/.opencode/orchestrator.py"
+function myapp() {
+  python /path/to/your-project/.opencode/orchestrator.py "$*"
+}
+```
 
+Then reload your shell:
+```bash
 source ~/.zshrc
 ```
 
-> 💡 The alias name is entirely up to you — `myapp`, `devbot`, `trader`, `shopify-bot`, anything. This becomes the command you type to run the pipeline.
+> 💡 **Why a function instead of an alias?** A shell function with `"$*"` collects everything you type after `myapp` as a single string — so you don't need to wrap your prompt in quotes. Both work, but the function is more convenient for natural language tasks.
 
 **6. Run!**
+
+With the function, you can type naturally — no quotes needed:
+```bash
+myapp add a user authentication feature
+```
+
+Or with quotes if you prefer — both work:
 ```bash
 myapp "add a user authentication feature"
 ```
-
-The syntax is always: `your-alias "your task in quotes"`
 
 ---
 
@@ -254,13 +268,14 @@ This is a **fire-and-forget pipeline**, not a chat assistant. The prompt you pas
 ### Syntax
 
 ```bash
-myapp "your task here"
-#  ↑         ↑
-#  your      always wrap
-#  alias     in quotes
+# Without quotes (recommended — more natural to type)
+myapp add a stop loss feature to the trading engine
+
+# With quotes (also fine)
+myapp "add a stop loss feature to the trading engine"
 ```
 
-Replace `myapp` with whatever alias you set up. The task must always be wrapped in double quotes.
+Replace `myapp` with whatever function name you set up. Thanks to the `"$*"` in the shell function, both styles work identically.
 
 ### Prompt Formula
 
