@@ -376,7 +376,7 @@ myapp "should I use asyncio or threading for the data feed?"
   myapp "refactor the data feed handlers into a single DataFeedManager class"
   ```
 
-- **You control the approval gate** — after the planner outputs its plan, you'll be asked to approve before any code is written. Read it carefully and type `n` to abort if it doesn't look right.
+- **You control the delegation gate** — after the planner outputs its plan, you'll be asked "Should I delegate this to the coder agent?" Review the plan carefully. Type `n` to get a menu of alternatives: modify the plan, ask a question, switch to review only, or pause.
 
 ---
 
@@ -420,7 +420,7 @@ What it does:
 - Runs a **git pre-flight check** before anything else — detects current branch, unpushed commits, and uncommitted changes, then injects this context directly into the planner prompt so it can make informed decisions
 - Runs the **Planner** (Kimi K2.5) with the git context already included
 - Detects the route tag the planner embeds — `[ROUTE: coder]`, `[ROUTE: reviewer]`, or `[ROUTE: none]`
-- Pauses at a **human approval gate** before any code is written
+- Pauses at a **human delegation gate** before any code is written
 - If approved, routes to the **Coder** (MiniMax M2.5) with the plan
 - Runs **Reviewer** (GLM-5) and **Approver** (MiniMax M2.7) independently — consensus decides the outcome
 - If both reject, automatically re-prompts the Coder with the combined issues (up to 3 retries)
@@ -449,10 +449,10 @@ This is the system prompt that turns Kimi K2.5 into your planner agent. It handl
 What it does:
 - Acts as a **thinker and advisor** — reasons deeply, answers anything, but never executes
 - Detects intent across six categories: coding task, review request, committed-but-not-pushed, git commit, general question, or error/debug scenario
-- For coding tasks: produces a structured plan with files to modify, step-by-step instructions, risks, and definition of done
-- For committed-but-not-pushed: creates a two-step plan — coder pushes first, then reviewer takes over automatically
-- For general questions (git status, server checks, system health, etc.): answers directly with exact bash commands for you to run manually — no approval gate, no agent handoff
-- Always ends coding/review responses with a human approval gate before handing off
+- For coding tasks: produces a structured plan then ends with a **delegation gate** — "Should I delegate this to the coder agent?"
+- If you say `n`, it offers a menu: modify the plan, ask a question, switch to review only, or pause
+- For committed-but-not-pushed: creates a two-step plan — coder pushes first, then reviewer takes over
+- For general questions: answers directly with exact bash commands to run manually — no delegation gate, no agent handoff
 
 Update the **Project Context** block to match your stack:
 ```markdown
@@ -473,7 +473,7 @@ Without this, the planner produces generic plans that may not match your codebas
 **Model: `opencode-go/minimax-m2.5`**
 **Edit required: Yes — Project Context + coding rules**
 
-The system prompt for MiniMax M2.5. It receives the approved plan from the orchestrator and implements it end-to-end.
+The system prompt for MiniMax M2.5. It receives the approved plan and implements it end-to-end.
 
 What it does:
 - Detects intent — refuses planning or review requests and redirects to the correct agent
@@ -482,11 +482,10 @@ What it does:
 - Follows strict coding rules: no hardcoded secrets, always handle exceptions, validate inputs, follow existing naming conventions
 - Handles the full git workflow: checks version control, shows uncommitted changes, stages, commits with conventional format, and pushes
 - Handles unversioned projects: detects missing git repo, asks before running `git init`, optionally connects to a remote URL you provide
-- Commits using conventional commit format (`feat:`, `fix:`, `refactor:`, `test:`, `chore:`) with a detailed message
-- Pushes to the correct branch and reports files changed, commit hash, and branch name
-- Ends every response by directing you to switch to the reviewer agent
+- After every push, ends with a **delegation gate** — "Should I delegate this to the reviewer agent?"
+- If you say `n`, it offers a menu: make more changes, inspect the commit, skip to approver, go back to planner, or pause
 
-Update the **Project Context** block so the coder knows your stack. You can also tighten the coding rules to match your project's standards — for example, adding files it should never touch:
+Update the **Project Context** block so the coder knows your stack. You can also add project-specific rules in the commented block:
 ```markdown
 ## Project Context
 - **Language:** Python
@@ -502,14 +501,14 @@ Update the **Project Context** block so the coder knows your stack. You can also
 **Model: `opencode-go/glm-5`**
 **Edit required: Yes — Project Context + Critical Issues section**
 
-The first of two independent review agents. Runs immediately after the coder pushes.
+The first of two independent review agents. Runs after the coder pushes.
 
 What it does:
 - Detects intent — refuses to plan or code, only reviews
 - Reviews the latest commit for logic errors, security issues, missing error handling, and breaking changes
 - Outputs `✅ APPROVED` or `❌ CHANGES NEEDED` with specific issues listed
-- If approved, passes to the approver agent for the final independent verdict
-- If rejected, the orchestrator feeds the issues back to the coder automatically
+- If approved, ends with a **delegation gate** — "Should I delegate this to the approver agent?" — if you say `n` it offers alternatives (review again, skip approver, make more changes, or pause)
+- If changes needed, ends with a **delegation gate** — "Should I delegate this back to the coder?" — if you say `n` it offers alternatives (fix issues, override and proceed, go back to planner, or pause)
 
 Customise the **Critical Issues** block for your project's domain-specific rules:
 ```markdown
@@ -531,12 +530,11 @@ What it does:
 - Detects intent — refuses to plan or code, only approves
 - Reviews the same commit independently for the same categories (logic, security, quality, config)
 - Outputs `✅ APPROVED` or `❌ CHANGES NEEDED` with its own findings
-- The orchestrator then compares both verdicts:
-  - Both approve → deploy
-  - Both reject → back to coder (auto-retry)
-  - Split → asks you to decide
+- If approved, ends with a **deployment gate** — "Are you ready to pull to your server?" — if yes, gives exact `git pull` and Docker rebuild commands; if no, offers alternatives
+- If changes needed, ends with a **delegation gate** — "Should I delegate back to the coder?" — if no, offers alternatives (rethink with planner, override and deploy, re-review, or pause)
+- The orchestrator compares both verdicts: both approve → deploy, both reject → back to coder, split → you decide
 
-Customise the **Critical Issues** block to match your project — both agents should enforce the same rules so neither can be the weak link.
+Customise the **Critical Issues** block to match your project — both reviewer and approver should enforce the same rules:
 
 ---
 
